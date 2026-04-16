@@ -1,5 +1,33 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/AL-Go-Actions/v9.0/.Modules/settings.schema.json",
   "type": "AppSource App",
-  "templateUrl": "https://github.com/microsoft/AL-Go-AppSource@main"
+  "templateUrl": "https://github.com/microsoft/AL-Go-AppSource@main",
+  "repoVersion": "28.0",
+  "versioningStrategy": 18,
+  "enablePerTenantExtensionCop": true,
+  "cacheImageName": "",
+  "environments": [
+    "BCBE-LIVE",
+    "BCBE-UAT"    
+  ],
+  "DeployToBCBE-LIVE": {
+    "EnvironmentType": "Cloud",
+    "EnvironmentName": "BCBE-LIVE",
+    "Scope": "PTE",
+    "ContinuousDeployment": false,
+    "runs-on": "DOCKER001",
+    "Branches": [
+      "xyz"
+    ]
+  },
+    "DeployToBCBE-UAT": {
+    "EnvironmentType": "Cloud",
+    "EnvironmentName": "BCBE-UAT",
+    "Scope": "PTE",
+    "ContinuousDeployment": false,
+    "runs-on": "DOCKER001",
+    "Branches": [
+      "xyz"
+    ]
+  }
 }
