@@ -1,59 +1,151 @@
 Param(
-    [Hashtable]$parameters
+    [Parameter(Mandatory = $true)]
+    [Hashtable] $parameters
 )
 
-function New-TemporaryFolder {
-    $tempPath = Join-Path -Path $PWD -ChildPath "_temp"
-    New-Item -ItemType Directory -Path $tempPath | Out-Null
+Set-StrictMode -Version 2.0
+$ErrorActionPreference = 'Stop'
 
-    return $tempPath
-}
-
-function Get-Script {
-    param (
+function Get-ParameterValue {
+    Param(
         [Parameter(Mandatory = $true)]
-        [string]$ScriptUrl,
+        [Hashtable] $InputObject,
         [Parameter(Mandatory = $true)]
-        [string]$outputPath
+        [string[]] $Names,
+        [Parameter(Mandatory = $false)]
+        $DefaultValue = $null
     )
-    Write-Host "`nDownloading ${ScriptUrl}..."
 
-    if (-not (Test-Path -Path $outputPath)) {
-        throw "Output path '$outputPath' does not exist."
+    foreach ($name in $Names) {
+        if ($InputObject.ContainsKey($name) -and $null -ne $InputObject.$name -and "$($InputObject.$name)" -ne '') {
+            return $InputObject.$name
+        }
     }
-    $filename = [System.IO.Path]::GetFileName($ScriptUrl)
-    $dplScriptPath = Join-Path -Path $outputPath -ChildPath $filename
-    Write-Host "::debug::Downloading $ScriptUrl..."
-    Invoke-WebRequest -Uri $ScriptUrl -OutFile $dplScriptPath
-    Write-Host "Downloaded ${ScriptUrl} to $dplScriptPath"
 
-    return $dplScriptPath
+    return $DefaultValue
 }
 
-Write-Host "Deployment Type (CD or Release): $($parameters.type)"
-Write-Host "Apps to deploy: $($parameters.apps)"
+function Get-NavAdminToolPath {
+    Param(
+        [Parameter(Mandatory = $true)]
+        [string] $ServerInstance
+    )
+    $path = ([string](Get-WmiObject win32_service | Where-Object {$_.Name.ToString().ToUpper() -like "*NavServer*$ServerInstance*"} | Select-Object PathName).PathName).ToUpper()
+
+    $shortPath = $path.Substring(0,$path.IndexOf("EXE") + 3)
+    if ($shortPath.StartsWith('"'))
+    {
+        $shortPath = $shortPath.Remove(0,1)
+    }
+ 
+    $NavAdminTool = (Get-ChildItem -Path ((Get-ChildItem $ShortPath).Directory.FullName) "NavAdminTool.ps1").FullName
+            
+    return $NavAdminTool
+}
+
+function Resolve-AppList {
+    Param(
+        [Parameter(Mandatory = $false)]
+        [Object[]] $Apps,
+        [Parameter(Mandatory = $false)]
+        [Object[]] $Dependencies
+    )
+
+    $tempPath = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ([Guid]::NewGuid().ToString())
+    New-Item -Path $tempPath -ItemType Directory | Out-Null
+
+    try {
+        if ($Dependencies) {
+            Copy-AppFilesToFolder -appFiles $Dependencies -folder $tempPath | Out-Null
+        }
+        if ($Apps) {
+            Copy-AppFilesToFolder -appFiles $Apps -folder $tempPath | Out-Null
+        }
+
+        $appFiles = @(Get-ChildItem -Path $tempPath -Filter '*.app' -File | Sort-Object -Property Name | ForEach-Object { $_.FullName })
+        if (-not $appFiles -or $appFiles.Count -eq 0) {
+            throw 'No .app files were found for deployment.'
+        }
+
+        return $tempPath, $appFiles
+    }
+    catch {
+        if (Test-Path -Path $tempPath) {
+            Remove-Item -Path $tempPath -Recurse -Force
+        }
+        throw
+    }
+}
+
+function Deploy-NavAppFile {
+    Param(
+        [Parameter(Mandatory = $true)]
+        [string] $AppPath,
+        [Parameter(Mandatory = $true)]
+        [string] $ServerInstance,
+        [Parameter(Mandatory = $true)]
+        [string] $Tenant
+    )
+
+    $appInfo = Get-NAVAppInfo -Path $AppPath
+    if (-not $appInfo) {
+        throw "Unable to read app metadata from '$AppPath'."
+    }
+
+    $appName = $appInfo.Name
+    $appPublisher = $appInfo.Publisher
+    $appVersion = $appInfo.Version
+
+    $previousInstalledVersions = @(
+        Get-NAVAppInfo -ServerInstance $ServerInstance -Tenant $Tenant -Name $appName -Publisher $appPublisher -ErrorAction SilentlyContinue
+    )
+    $hasPreviousInstalledVersion = ($previousInstalledVersions.Count -gt 0)
+
+    Write-Host "Publishing $appName ($appVersion)"
+    Publish-NAVApp -ServerInstance $ServerInstance -Path $AppPath -SkipVerification
+
+    Write-Host "Syncing $appName ($appVersion)"
+    Sync-NAVApp -ServerInstance $ServerInstance -Tenant $Tenant -Name $appName -Publisher $appPublisher -Version $appVersion
+
+    if ($hasPreviousInstalledVersion) {
+        Write-Host "Starting data upgrade for $appName ($appVersion)"
+        Start-NAVAppDataUpgrade -ServerInstance $ServerInstance -Tenant $Tenant -Name $appName -Publisher $appPublisher -Version $appVersion
+    }
+    else {
+        Write-Host "Installing $appName ($appVersion)"
+        Install-NAVApp -ServerInstance $ServerInstance -Tenant $Tenant -Name $appName -Publisher $appPublisher -Version $appVersion
+    }
+}
+
+$serverInstance = Get-ParameterValue -InputObject $parameters -Names @('ServerInstance', 'BCServerInstance', 'InstanceName', 'EnvironmentName')
+if (-not $serverInstance) {
+    throw 'Missing ServerInstance. Add ServerInstance to DeployTo<EnvironmentName> settings or set EnvironmentName to the BC service instance name.'
+}
+
+$tenant = Get-ParameterValue -InputObject $parameters -Names @('Tenant', 'tenant') -DefaultValue 'default'
+
+Write-Host "Deployment Type (CD or Publish): $($parameters.type)"
 Write-Host "Environment Type: $($parameters.EnvironmentType)"
-Write-Host "Environment Name: $($parameters.EnvironmentName)"
+Write-Host "Server Instance: $serverInstance"
+Write-Host "Tenant: $tenant"
 
-$scriptUrl = "https://raw.githubusercontent.com/Harmonize-it/ALGO/refs/heads/main/Update-NavAPP.ps1"
-$filename = [System.IO.Path]::GetFileName($scriptUrl)
+$navAdminToolPath = Get-NavAdminToolPath -ServerInstance $serverInstance
+Write-Host "Importing NavAdminTool from '$navAdminToolPath'"
+. $navAdminToolPath
 
-$tempPath = New-TemporaryFolder
-cd $tempPath
+$tempPath = $null
+try {
+    $tempPath, $appFiles = Resolve-AppList -Apps $parameters.Apps -Dependencies $parameters.Dependencies
 
-Get-Script -ScriptUrl $scriptUrl -outputPath $tempPath 
+    Write-Host "Apps to deploy:"
+    $appFiles | ForEach-Object { Write-Host "- $([System.IO.Path]::GetFileName($_))" }
 
-Copy-AppFilesToFolder -appFiles $parameters.apps -folder $tempPath | Out-Null
-$appsList = @(Get-ChildItem -Path $tempPath -Filter *.app)
-if (-not $appsList -or $appsList.Count -eq 0) {
-    Write-Host "::error::No apps to publish found."
-    exit 1
+    foreach ($appFile in $appFiles) {
+        Deploy-NavAppFile -AppPath $appFile -ServerInstance $serverInstance -Tenant $tenant
+    }
 }
-Write-Host "Apps:"
-$appsList | ForEach-Object -Process { 
-    
-    $appPath = $_.FullName
-    Write-Host "Processing app file... $($appPath)"
-
-    .\Update-NAVApp.ps1 -appPath $appPath -srvInst $parameters.EnvironmentName
+finally {
+    if ($tempPath -and (Test-Path -Path $tempPath)) {
+        Remove-Item -Path $tempPath -Recurse -Force
+    }
 }
