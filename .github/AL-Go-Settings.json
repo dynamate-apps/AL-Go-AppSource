@@ -2,6 +2,11 @@
   "$schema": "https://raw.githubusercontent.com/microsoft/AL-Go-Actions/v9.0/.Modules/settings.schema.json",
   "type": "AppSource App",
   "templateUrl": "https://github.com/microsoft/AL-Go-AppSource@main",
+  "trustedSigning": {
+    "Endpoint": "https://weu.codesigning.azure.net",
+    "Account": "bocount",
+    "CertificateProfile": "christiaens"
+  },
   "repoVersion": "28.0",
   "versioningStrategy": 18,
   "enablePerTenantExtensionCop": true,
