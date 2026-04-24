@@ -10,7 +10,6 @@
   "repoVersion": "28.0",
   "versioningStrategy": 18,
   "cacheKeepDays": 9999,
-  "cacheImageName": "",
   "environments": [
     "BCBE-LIVE",
     "BCBE-UAT"    
