@@ -9,7 +9,7 @@
   },
   "repoVersion": "28.0",
   "versioningStrategy": 18,
-  "enablePerTenantExtensionCop": true,
+  "cacheKeepDays": 9999,
   "cacheImageName": "",
   "environments": [
     "BCBE-LIVE",
